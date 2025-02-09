@@ -17,6 +17,9 @@ export const metadata: Metadata = {
   description: "Pomodoro timer application",
   themeColor: "#000000",
   manifest: "/manifest.json",
+  icons: {
+    icon: "/orange.png",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black",
