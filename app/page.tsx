@@ -375,6 +375,14 @@ function OrangePhysics({ count }: { count: number }) {
   const [motionPermissionGranted, setMotionPermissionGranted] = useState(false);
   const [needsMotionPermission, setNeedsMotionPermission] = useState(false);
 
+  interface DeviceOrientationEventConstructorWithPermission
+    extends DeviceOrientationEventInit {
+    requestPermission?: () => Promise<"granted" | "denied">;
+  }
+
+  // Cast DeviceOrientationEvent to the extended interface.
+  const DeviceOrientationEventWithPermission = DeviceOrientationEvent as DeviceOrientationEventConstructorWithPermission;
+
   const handleDeviceOrientation = useCallback((event: DeviceOrientationEvent) => {
     const gamma = event.gamma || 0; // left-to-right tilt in degrees
     const beta = event.beta || 0;  // front-to-back tilt in degrees
@@ -385,14 +393,15 @@ function OrangePhysics({ count }: { count: number }) {
     };
   }, []);
 
-  // Check for motion permission requirement (e.g. on iOS).
   useEffect(() => {
+    // If the requestPermission method exists, we assume a permission prompt is required (iOS).
     if (
       typeof DeviceOrientationEvent !== "undefined" &&
-      typeof (DeviceOrientationEvent as any).requestPermission === "function"
+      typeof DeviceOrientationEventWithPermission.requestPermission === "function"
     ) {
       setNeedsMotionPermission(true);
     } else {
+      // On Android and other devices that don't require explicit permission, add the event listener immediately.
       window.addEventListener("deviceorientation", handleDeviceOrientation, true);
     }
     return () => {
@@ -400,9 +409,11 @@ function OrangePhysics({ count }: { count: number }) {
     };
   }, [handleDeviceOrientation]);
 
+  // Updated function to request permission (this will only be invoked on devices that require it, such as iOS).
   const requestMotionPermission = async () => {
     try {
-      const permission = await (DeviceOrientationEvent as any).requestPermission();
+      // The non-null assertion tells TypeScript that requestPermission exists here.
+      const permission = await DeviceOrientationEventWithPermission.requestPermission!();
       if (permission === "granted") {
         setMotionPermissionGranted(true);
         setNeedsMotionPermission(false);
