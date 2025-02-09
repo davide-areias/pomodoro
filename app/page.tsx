@@ -1,5 +1,6 @@
 "use client"
 import { useState, useEffect, useRef, useCallback } from "react";
+import confetti from "canvas-confetti";
 import { supabase } from "../app/lib/supabaseClient";
 import Auth from "./auth";
 import type { Session } from "@supabase/supabase-js";
@@ -7,10 +8,13 @@ import type { Session } from "@supabase/supabase-js";
 export default function PomodoroApp() {
   // Supabase session state
   const [session, setSession] = useState<Session | null>(null);
+  // Loading state until session is determined.
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      setIsSessionLoading(false);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -21,21 +25,26 @@ export default function PomodoroApp() {
     };
   }, []);
 
-  // Timer durations (in minutes). The "workTime" corresponds to focus time and "breakTime" to interval time.
+  // Timer durations (in minutes)
   const [workTime, setWorkTime] = useState(30);
   const [breakTime, setBreakTime] = useState(5);
 
-  // Timer in seconds
+  // Timer in seconds and mode state.
   const [currentTime, setCurrentTime] = useState(workTime * 60);
-  // Mode can be "idle", "work", "finishedWork", or "break"
   const [mode, setMode] = useState<"idle" | "work" | "finishedWork" | "break">("idle");
+
   // For opening the settings modal
   const [isEditing, setIsEditing] = useState(false);
+  // State for settings saving loading spinner.
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
-  // Pomodoro count state
+  // Pomodoro count state – this now controls both the counter display and the number of oranges.
   const [pomodoroCount, setPomodoroCount] = useState(0);
 
-  // Wrap fetchPomodoroCount in useCallback so it's stable as a dependency.
+  // Absolute end timestamp (in milliseconds)
+  const [endTime, setEndTime] = useState<number | null>(null);
+
+  // Fetch pomodoro count from DB for logged-in user.
   const fetchPomodoroCount = useCallback(async () => {
     if (!session) return;
     const { data, error } = await supabase
@@ -55,19 +64,32 @@ export default function PomodoroApp() {
     if (session) {
       fetchPomodoroCount();
     }
-  }, [fetchPomodoroCount]);
+  }, [fetchPomodoroCount, session]);
 
+  // Initialize pomodoro row if needed.
   useEffect(() => {
     if (session) {
       const initPomodoroRow = async () => {
-        const { error } = await supabase
+        // Check if a record already exists.
+        const { data, error: selectError } = await supabase
           .from("pomodoros")
-          .upsert(
-            { email: session.user.email, user_id: session.user.id, count: 0 },
-            { onConflict: "user_id" }
-          );
-        if (error) {
-          console.error("Error initializing pomodoro row:", error.message);
+          .select("user_id")
+          .eq("user_id", session.user.id)
+          .maybeSingle();
+
+        if (selectError) {
+          console.error("Error checking pomodoro row:", selectError.message);
+          return;
+        }
+
+        // If no record, then insert one.
+        if (!data) {
+          const { error: insertError } = await supabase
+            .from("pomodoros")
+            .insert([{ email: session.user.email, user_id: session.user.id, count: 0 }]);
+          if (insertError) {
+            console.error("Error inserting pomodoro row:", insertError.message);
+          }
         }
       };
 
@@ -75,7 +97,7 @@ export default function PomodoroApp() {
     }
   }, [session]);
 
-  // NEW: Initialize or fetch user settings from the "user_settings" table.
+  // Initialize or fetch user settings.
   useEffect(() => {
     if (session) {
       const initUserSettings = async () => {
@@ -87,12 +109,10 @@ export default function PomodoroApp() {
         if (error) {
           console.error("Error fetching user settings:", error.message);
         } else if (data) {
-          // If settings exist, update local durations.
           setWorkTime(data.focus_time);
           setBreakTime(data.interval_time);
           setCurrentTime(data.focus_time * 60);
         } else {
-          // If no settings found, insert default settings.
           const { error: insertError } = await supabase
             .from("user_settings")
             .upsert(
@@ -109,7 +129,7 @@ export default function PomodoroApp() {
     }
   }, [session, workTime, breakTime]);
 
-  // NEW: Update user settings in the "user_settings" table.
+  // Update user settings in the DB.
   async function updateUserSettings() {
     if (!session) return;
     const { error } = await supabase
@@ -123,7 +143,9 @@ export default function PomodoroApp() {
 
   // Save settings handler called on modal save.
   const handleSaveSettings = async () => {
+    setSettingsSaving(true);
     await updateUserSettings();
+    setSettingsSaving(false);
     setIsEditing(false);
     // If in idle mode, reset currentTime based on updated workTime.
     if (mode === "idle") {
@@ -131,7 +153,7 @@ export default function PomodoroApp() {
     }
   };
 
-  // Wrap recordPomodoro in useCallback. Its dependencies include session and pomodoroCount.
+  // Record pomodoro in the DB when a full cycle is completed.
   const recordPomodoro = useCallback(async () => {
     if (!session) return;
     const { error } = await supabase
@@ -145,61 +167,76 @@ export default function PomodoroApp() {
     }
   }, [session, pomodoroCount]);
 
+  // Helper: Launch confetti using canvas-confetti.
+  const launchConfetti = () => {
+    confetti({
+      particleCount: 100,
+      spread: 70,
+      origin: { y: 0.6 }
+    });
+  };
+
   // Use a ref to track the previous mode.
   const prevModeRef = useRef(mode);
   useEffect(() => {
+    // When work finishes, show confetti.
+    if (mode === "finishedWork") {
+      launchConfetti();
+    }
     // When transitioning from break back to idle, a cycle is complete.
     if (prevModeRef.current === "break" && mode === "idle") {
       recordPomodoro();
+      launchConfetti();
     }
     prevModeRef.current = mode;
   }, [mode, recordPomodoro]);
 
-  // Reset the timer (work phase) when in "idle" mode and workTime changes.
+  // Reset the timer when in idle mode and workTime changes.
   useEffect(() => {
     if (mode === "idle") {
       setCurrentTime(workTime * 60);
     }
   }, [workTime, mode]);
 
-  // Timer countdown logic (for both work and break phases).
+  // Start work: record an absolute ending time.
+  const startWork = () => {
+    if (mode === "idle") {
+      const newEnd = Date.now() + workTime * 60 * 1000;
+      setEndTime(newEnd);
+      setMode("work");
+    }
+  };
+
+  // Start break.
+  const startBreak = () => {
+    if (mode === "finishedWork") {
+      const newEnd = Date.now() + breakTime * 60 * 1000;
+      setEndTime(newEnd);
+      setMode("break");
+    }
+  };
+
+  // Timer countdown logic.
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
-    if (mode === "work" || mode === "break") {
+    if ((mode === "work" || mode === "break") && endTime !== null) {
       interval = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev > 0) return prev - 1;
-          else {
-            if (mode === "work") {
-              setMode("finishedWork");
-            } else if (mode === "break") {
-              setMode("idle");
-            }
-            if (interval) clearInterval(interval);
-            return 0;
+        const secondsLeft = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+        setCurrentTime(secondsLeft);
+        if (secondsLeft === 0) {
+          if (interval !== null) clearInterval(interval);
+          if (mode === "work") {
+            setMode("finishedWork");
+          } else if (mode === "break") {
+            setMode("idle");
           }
-        });
+        }
       }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [mode]);
-
-  // Start work timer from idle.
-  const startWork = () => {
-    if (mode === "idle") {
-      setMode("work");
-    }
-  };
-
-  // Start break timer once work is finished.
-  const startBreak = () => {
-    if (mode === "finishedWork") {
-      setCurrentTime(breakTime * 60);
-      setMode("break");
-    }
-  };
+  }, [mode, endTime]);
 
   // Helper to format the timer (mm:ss).
   const formatTime = (seconds: number) => {
@@ -208,23 +245,35 @@ export default function PomodoroApp() {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  // Show the sign-in flow if not authenticated.
+  // Show a full-screen loader while checking the session.
+  if (isSessionLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black">
+        <div className="w-12 h-12 border-t-4 border-blue-500 border-solid rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  // Show the sign-in page if not authenticated.
   if (!session) {
     return <Auth />;
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-black text-white">
+    <div className="relative flex flex-col items-center justify-center h-screen bg-black text-white">
+      {/* Fixed orange counter display */}
+      <div className="absolute top-4 left-4 flex items-center space-x-2">
+        <img src="/orange.png" alt="Orange" className="w-8 h-8" />
+        <span className="text-2xl">{pomodoroCount}</span>
+      </div>
+
       <h1 className="text-4xl font-bold mb-8">Pomodoro Timer</h1>
-      <div className="mb-4">Pomodoros Completed: {pomodoroCount}</div>
-      {/* Timer display is clickable (opens settings) only when idle */}
       <div
         onClick={() => mode === "idle" && setIsEditing(true)}
         className="text-8xl font-mono cursor-pointer select-none"
       >
         {formatTime(currentTime)}
       </div>
-
       {mode === "idle" && (
         <button
           className="mt-8 px-6 py-2 bg-white text-black rounded-full hover:scale-105 transition-transform"
@@ -233,21 +282,19 @@ export default function PomodoroApp() {
           Start
         </button>
       )}
-
       {mode === "finishedWork" && (
         <div className="mt-8 flex flex-col items-center">
           <div className="animate-bounce text-2xl mb-4">
             Work complete! Time for a break!
           </div>
           <button
-            className="px-8 py-4 bg-gradient-to-r from-green-500 to-teal-500 rounded-full text-2xl hover:scale-105 transition-transform"
+            className="mt-8 px-6 py-2 bg-white text-black rounded-full hover:scale-105 transition-transform"
             onClick={startBreak}
           >
             Start Pause
           </button>
         </div>
       )}
-
       {mode === "work" && <div className="mt-8 text-2xl">Focus!</div>}
       {mode === "break" && <div className="mt-8 text-2xl">Break Time</div>}
 
@@ -289,12 +336,195 @@ export default function PomodoroApp() {
               </div>
             </div>
             <button
-              className="mt-4 px-6 py-2 bg-blue-500 rounded hover:bg-blue-600 transition-colors"
+              disabled={settingsSaving}
+              className="mt-4 px-6 py-2 bg-blue-500 rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
               onClick={handleSaveSettings}
             >
-              Save
+              {settingsSaving ? (
+                <div className="flex items-center justify-center">
+                  <div className="w-6 h-6 border-t-4 border-blue-300 rounded-full animate-spin"></div>
+                </div>
+              ) : (
+                "Save"
+              )}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Orange physics simulation overlay */}
+      <OrangePhysics count={pomodoroCount} />
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------
+// OrangePhysics component
+// This component renders as many orange images (from public/orange.png)
+// as the current pomodoro count and simulates them moving around under
+// physics (with acceleration coming from the device's orientation).
+// -------------------------------------------------------------------
+
+function OrangePhysics({ count }: { count: number }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const domRefs = useRef(new Map<number, HTMLImageElement>());
+  const orangesDataRef = useRef<
+    { id: number; x: number; y: number; vx: number; vy: number }[]
+  >([]);
+  const accelRef = useRef({ ax: 0, ay: 0 });
+  const [motionPermissionGranted, setMotionPermissionGranted] = useState(false);
+  const [needsMotionPermission, setNeedsMotionPermission] = useState(false);
+
+  const handleDeviceOrientation = useCallback((event: DeviceOrientationEvent) => {
+    const gamma = event.gamma || 0; // left-to-right tilt in degrees
+    const beta = event.beta || 0;  // front-to-back tilt in degrees
+    const sensitivity = 3; // Adjust sensitivity as needed
+    accelRef.current = {
+      ax: gamma * sensitivity,
+      ay: beta * sensitivity,
+    };
+  }, []);
+
+  // Check for motion permission requirement (e.g. on iOS).
+  useEffect(() => {
+    if (
+      typeof DeviceOrientationEvent !== "undefined" &&
+      typeof (DeviceOrientationEvent as any).requestPermission === "function"
+    ) {
+      setNeedsMotionPermission(true);
+    } else {
+      window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+    }
+    return () => {
+      window.removeEventListener("deviceorientation", handleDeviceOrientation, true);
+    };
+  }, [handleDeviceOrientation]);
+
+  const requestMotionPermission = async () => {
+    try {
+      const permission = await (DeviceOrientationEvent as any).requestPermission();
+      if (permission === "granted") {
+        setMotionPermissionGranted(true);
+        setNeedsMotionPermission(false);
+        window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+      }
+    } catch (error) {
+      console.error("Device orientation permission error:", error);
+    }
+  };
+
+  // Update (or add) oranges when the count changes.
+  useEffect(() => {
+    let oranges = orangesDataRef.current;
+    if (count > oranges.length) {
+      const numToAdd = count - oranges.length;
+      const container = containerRef.current;
+      const containerWidth = container?.clientWidth || window.innerWidth;
+      const containerHeight = container?.clientHeight || window.innerHeight;
+      for (let i = 0; i < numToAdd; i++) {
+        const id = Date.now() + i;
+        oranges.push({
+          id,
+          x: Math.random() * (containerWidth - 50),
+          y: Math.random() * (containerHeight - 50),
+          vx: 0,
+          vy: 0,
+        });
+      }
+    } else if (count < oranges.length) {
+      oranges = oranges.slice(0, count);
+    }
+    orangesDataRef.current = oranges;
+  }, [count]);
+
+  // Physics animation loop.
+  useEffect(() => {
+    let animationFrameId: number;
+    let lastTime = performance.now();
+
+    const update = (time: number) => {
+      const dt = (time - lastTime) / 1000; // seconds
+      lastTime = time;
+      const container = containerRef.current;
+      const containerWidth = container?.clientWidth || window.innerWidth;
+      const containerHeight = container?.clientHeight || window.innerHeight;
+      const size = 50;
+
+      // Use sensor data if available, otherwise default acceleration.
+      const defaultAccel = { ax: 0, ay: 300 }; // px/s^2
+      const accel =
+        (needsMotionPermission && !motionPermissionGranted) ||
+        !window.DeviceOrientationEvent
+          ? defaultAccel
+          : accelRef.current;
+
+      orangesDataRef.current.forEach((orange) => {
+        // Update velocity with acceleration.
+        orange.vx += accel.ax * dt;
+        orange.vy += accel.ay * dt;
+        // Update position.
+        orange.x += orange.vx * dt;
+        orange.y += orange.vy * dt;
+
+        // Boundary collision check.
+        if (orange.x < 0) {
+          orange.x = 0;
+          orange.vx = -orange.vx * 0.8;
+        } else if (orange.x + size > containerWidth) {
+          orange.x = containerWidth - size;
+          orange.vx = -orange.vx * 0.8;
+        }
+        if (orange.y < 0) {
+          orange.y = 0;
+          orange.vy = -orange.vy * 0.8;
+        } else if (orange.y + size > containerHeight) {
+          orange.y = containerHeight - size;
+          orange.vy = -orange.vy * 0.8;
+        }
+
+        // Apply slight friction.
+        orange.vx *= 0.99;
+        orange.vy *= 0.99;
+
+        // Update the DOM element's position.
+        const el = domRefs.current.get(orange.id);
+        if (el) {
+          el.style.transform = `translate(${orange.x}px, ${orange.y}px)`;
+        }
+      });
+      animationFrameId = requestAnimationFrame(update);
+    };
+
+    animationFrameId = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [motionPermissionGranted, needsMotionPermission, handleDeviceOrientation]);
+
+  return (
+    <div ref={containerRef} className="fixed inset-0 pointer-events-none">
+      {orangesDataRef.current.map((orange) => (
+        <img
+          key={orange.id}
+          ref={(el) => {
+            if (el) {
+              domRefs.current.set(orange.id, el);
+              el.style.transform = `translate(${orange.x}px, ${orange.y}px)`;
+              el.style.position = "absolute";
+              el.style.width = "50px";
+              el.style.height = "50px";
+            }
+          }}
+          src="/orange.png"
+          alt="orange"
+        />
+      ))}
+      {needsMotionPermission && (
+        <div className="absolute bottom-4 right-4 pointer-events-auto">
+          <button
+            onClick={requestMotionPermission}
+            className="px-4 py-2 bg-blue-500 text-white rounded"
+          >
+            Enable Motion
+          </button>
         </div>
       )}
     </div>

@@ -12,6 +12,7 @@
     "@supabase/supabase-js": "^2.48.1",
     "next": "15.1.6",
     "react": "^19.0.0",
+    "react-canvas-confetti": "^2.0.7",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
