@@ -36,12 +36,19 @@ export default function PomodoroApp() {
   // Fetch the current pomodoro count for the signed-in user
   async function fetchPomodoroCount() {
     if (!session) return;
-    const { count, error } = await supabase
+
+    // Retrieve the actual 'count' column data from the user's pomodoro row.
+    const { data, error } = await supabase
       .from("pomodoros")
-      .select("*", { count: "exact", head: true })
-      .eq("email", session.user.email);
-    if (!error) {
-      setPomodoroCount(count || 0);
+      .select("count")
+      .eq("user_id", session.user.id);
+
+    if (error) {
+      console.error("Error fetching pomodoro count:", error.message);
+    } else if (data && data.length > 0) {
+      setPomodoroCount(data[0].count);
+    } else {
+      setPomodoroCount(0);
     }
   }
 
@@ -51,14 +58,35 @@ export default function PomodoroApp() {
     }
   }, [session]);
 
+  useEffect(() => {
+    if (session) {
+      const initPomodoroRow = async () => {
+        const { error } = await supabase
+          .from("pomodoros")
+          .upsert(
+            { email: session.user.email, user_id: session.user.id, count: 0 },
+            { onConflict: "user_id" } // Ensure your pomodoros table has a unique constraint on the user_id column.
+          );
+        if (error) {
+          console.error("Error initializing pomodoro row:", error.message);
+        }
+      };
+
+      initPomodoroRow();
+    }
+  }, [session]);
+
   // Record a completed pomodoro cycle by inserting a record with the user's email.
   async function recordPomodoro() {
     if (!session) return;
+
     const { error } = await supabase
       .from("pomodoros")
-      .insert({ email: session.user.email });
+      .update({ count: pomodoroCount + 1 })
+      .eq("user_id", session.user.id);
+
     if (error) {
-      console.error("Error recording pomodoro:", error);
+      console.error("Error recording pomodoro:", error.message);
     } else {
       // Update our local count immediately.
       setPomodoroCount((prev) => prev + 1);
