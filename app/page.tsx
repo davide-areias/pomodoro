@@ -399,12 +399,12 @@ export default function PomodoroApp() {
 
 function OrangePhysics({
   count,
-  startButtonRef
+  startButtonRef,
 }: {
   count: number;
   startButtonRef: React.RefObject<HTMLButtonElement | null>;
 }) {
-  const orangeSize = 70; // Use this variable to set the size of each orange.
+  const orangeSize = 70; // Increase the size of the oranges.
   const containerRef = useRef<HTMLDivElement>(null);
   const [oranges, setOranges] = useState<
     { id: number; x: number; y: number; vx: number; vy: number }[]
@@ -418,13 +418,12 @@ function OrangePhysics({
     extends DeviceOrientationEventInit {
     requestPermission?: () => Promise<"granted" | "denied">;
   }
-
-  // Cast DeviceOrientationEvent to the extended interface.
-  const DeviceOrientationEventWithPermission = DeviceOrientationEvent as DeviceOrientationEventConstructorWithPermission;
+  const DeviceOrientationEventWithPermission =
+    DeviceOrientationEvent as DeviceOrientationEventConstructorWithPermission;
 
   const handleDeviceOrientation = useCallback((event: DeviceOrientationEvent) => {
     const gamma = event.gamma || 0; // left-to-right tilt in degrees
-    const beta = event.beta || 0;  // front-to-back tilt in degrees
+    const beta = event.beta || 0; // front-to-back tilt in degrees
     const sensitivity = 3; // Adjust sensitivity as needed
     accelRef.current = {
       ax: gamma * sensitivity,
@@ -433,14 +432,12 @@ function OrangePhysics({
   }, []);
 
   useEffect(() => {
-    // If the requestPermission method exists, we assume a permission prompt is required (iOS).
     if (
       typeof DeviceOrientationEvent !== "undefined" &&
       typeof DeviceOrientationEventWithPermission.requestPermission === "function"
     ) {
       setNeedsMotionPermission(true);
     } else {
-      // On Android and other devices that don't require explicit permission, add the event listener immediately.
       window.addEventListener("deviceorientation", handleDeviceOrientation, true);
     }
     return () => {
@@ -448,10 +445,8 @@ function OrangePhysics({
     };
   }, [handleDeviceOrientation]);
 
-  // Updated function to request permission (this will only be invoked on devices that require it, such as iOS).
   const requestMotionPermission = async () => {
     try {
-      // The non-null assertion tells TypeScript that requestPermission exists here.
       const permission = await DeviceOrientationEventWithPermission.requestPermission!();
       if (permission === "granted") {
         setMotionPermissionGranted(true);
@@ -463,7 +458,7 @@ function OrangePhysics({
     }
   };
 
-  // Update oranges state when the count changes.
+  // Add new oranges when count increases.
   useEffect(() => {
     const container = containerRef.current;
     const containerWidth = container?.clientWidth || window.innerWidth;
@@ -490,7 +485,7 @@ function OrangePhysics({
   useEffect(() => {
     let animationFrameId: number;
     let lastTime = performance.now();
-    const velocityBoost = 1.5; // Increase acceleration magnitude.
+    const velocityBoost = 1.5; // Increase the acceleration magnitude.
     const update = (time: number) => {
       const dt = (time - lastTime) / 1000; // seconds
       lastTime = time;
@@ -498,7 +493,7 @@ function OrangePhysics({
       const containerWidth = container?.clientWidth || window.innerWidth;
       const containerHeight = container?.clientHeight || window.innerHeight;
       const size = orangeSize; // consistently use orangeSize for boundaries
-      
+
       // Use sensor data if available; otherwise, default to an increased downward acceleration.
       const defaultAccel = { ax: 0, ay: 500 };
       const accel =
@@ -507,7 +502,7 @@ function OrangePhysics({
           : { ax: accelRef.current.ax * velocityBoost, ay: accelRef.current.ay * velocityBoost };
 
       setOranges((prevOranges) => {
-        // 1. Update positions with acceleration and boundary collision check.
+        // 1. Update positions.
         const newOranges = prevOranges.map((orange) => {
           let { x, y, vx, vy } = orange;
           vx += accel.ax * dt;
@@ -515,6 +510,7 @@ function OrangePhysics({
           x += vx * dt;
           y += vy * dt;
 
+          // Boundary collision check.
           if (x < 0) {
             x = 0;
             vx = -vx * 0.8;
@@ -534,23 +530,92 @@ function OrangePhysics({
           return { ...orange, x, y, vx, vy };
         });
 
-        // 2. (Optional) Perform pairwise collision checks if needed.
+        // 2. Orange-to-orange (circle) collision detection.
+        for (let i = 0; i < newOranges.length; i++) {
+          for (let j = i + 1; j < newOranges.length; j++) {
+            const orangeA = newOranges[i];
+            const orangeB = newOranges[j];
+            const ax = orangeA.x + size / 2;
+            const ay = orangeA.y + size / 2;
+            const bx = orangeB.x + size / 2;
+            const by = orangeB.y + size / 2;
+            const dx = bx - ax;
+            const dy = by - ay;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const minDistance = size;
+            if (distance < minDistance && distance > 0) {
+              const overlap = (minDistance - distance) / 2;
+              const nx = dx / distance;
+              const ny = dy / distance;
+              // Separate the oranges.
+              orangeA.x -= overlap * nx;
+              orangeA.y -= overlap * ny;
+              orangeB.x += overlap * nx;
+              orangeB.y += overlap * ny;
+              // Elastic collision response.
+              const dvx = orangeA.vx - orangeB.vx;
+              const dvy = orangeA.vy - orangeB.vy;
+              const impulse = dvx * nx + dvy * ny;
+              if (impulse < 0) {
+                const restitution = 0.8;
+                const impulseScalar = -impulse * restitution;
+                orangeA.vx += impulseScalar * nx;
+                orangeA.vy += impulseScalar * ny;
+                orangeB.vx -= impulseScalar * nx;
+                orangeB.vy -= impulseScalar * ny;
+              }
+            }
+          }
+        }
 
-        // 3. Update the DOM element positions accordingly.
+        // 3. Collision between each orange and the Start button.
+        if (startButtonRef && startButtonRef.current) {
+          const buttonRect = startButtonRef.current.getBoundingClientRect();
+          for (let i = 0; i < newOranges.length; i++) {
+            const orange = newOranges[i];
+            const cx = orange.x + size / 2;
+            const cy = orange.y + size / 2;
+            // Compute the closest point on the button rectangle.
+            const nearestX = Math.max(buttonRect.left, Math.min(cx, buttonRect.right));
+            const nearestY = Math.max(buttonRect.top, Math.min(cy, buttonRect.bottom));
+            const distX = cx - nearestX;
+            const distY = cy - nearestY;
+            const dist = Math.sqrt(distX * distX + distY * distY);
+            if (dist < size / 2) {
+              let nx = distX;
+              let ny = distY;
+              if (dist === 0) {
+                nx = 0;
+                ny = -1;
+              } else {
+                nx /= dist;
+                ny /= dist;
+              }
+              const dot = orange.vx * nx + orange.vy * ny;
+              orange.vx = orange.vx - 2 * dot * nx;
+              orange.vy = orange.vy - 2 * dot * ny;
+              const penetration = size / 2 - dist;
+              orange.x += nx * penetration;
+              orange.y += ny * penetration;
+            }
+          }
+        }
+
+        // 4. Update the DOM element positions.
         newOranges.forEach((orange) => {
           const el = domRefs.current.get(orange.id);
           if (el) {
             el.style.transform = `translate(${orange.x}px, ${orange.y}px)`;
           }
         });
+
         return newOranges;
       });
       animationFrameId = requestAnimationFrame(update);
     };
-
     animationFrameId = requestAnimationFrame(update);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [orangeSize, motionPermissionGranted, needsMotionPermission]);
+  }, [orangeSize, motionPermissionGranted, needsMotionPermission, startButtonRef]);
 
   return (
     <div ref={containerRef} className="fixed inset-0 pointer-events-none">
