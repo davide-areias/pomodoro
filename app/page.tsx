@@ -288,7 +288,6 @@ export default function PomodoroApp() {
         <span className="text-2xl">{pomodoroCount}</span>
       </div>
 
-      <h1 className="text-4xl font-bold mb-8">Pomodoro Timer</h1>
       <div
         onClick={() => mode === "idle" && setIsEditing(true)}
         className="text-8xl font-mono cursor-pointer select-none"
@@ -378,7 +377,7 @@ export default function PomodoroApp() {
       {!vibrationEnabled && (
         <button
           onClick={requestVibrationPermission}
-          className="absolute bottom-4 left-4 px-6 py-2 bg-white text-black rounded-full hover:scale-105 transition-transform"
+          className="fixed bottom-4 left-1/2 transform -translate-x-1/2 px-6 py-2 bg-white text-black rounded-full hover:scale-105 transition-transform"
         >
           Enable Vibration
         </button>
@@ -492,7 +491,7 @@ function OrangePhysics({
       const container = containerRef.current;
       const containerWidth = container?.clientWidth || window.innerWidth;
       const containerHeight = container?.clientHeight || window.innerHeight;
-      const size = orangeSize; // consistently use orangeSize for boundaries
+      const size = orangeSize; // use the full orange size provided
 
       // Use sensor data if available; otherwise, use a default downward acceleration.
       const defaultAccel = { ax: 0, ay: 500 };
@@ -529,11 +528,10 @@ function OrangePhysics({
           return { ...orange, x, y, vx, vy };
         });
 
-        // Define effective circle radius (less than half of the size for a tighter circle collision)
-        const effectiveRadius = size * 0.45; // using 45% of size as radius
-        const minDistance = effectiveRadius * 2; // sum of radii
+        // 2. Use a circle collision for orange-to-orange collisions.
+        const effectiveRadius = size / 4;      // Update here to use the real circular radius.
+        const minDistance = effectiveRadius * 2; // Two circles touch at one diameter.
 
-        // 2. Orange-to-orange (circle) collision detection.
         for (let i = 0; i < newOranges.length; i++) {
           for (let j = i + 1; j < newOranges.length; j++) {
             const orangeA = newOranges[i];
