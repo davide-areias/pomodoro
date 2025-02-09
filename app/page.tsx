@@ -281,7 +281,7 @@ export default function PomodoroApp() {
   }
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-screen bg-black text-white">
+    <div className="relative flex flex-col items-center justify-center h-screen bg-black text-white overflow-hidden">
       {/* Fixed orange counter display */}
       <div className="absolute top-4 left-4 flex items-center space-x-2">
         <img src="/orange.png" alt="Orange" className="w-8 h-8" />
@@ -378,7 +378,7 @@ export default function PomodoroApp() {
       {!vibrationEnabled && (
         <button
           onClick={requestVibrationPermission}
-          className="absolute bottom-4 left-4 px-4 py-2 bg-green-500 text-black rounded-full hover:scale-105 transition-transform"
+          className="absolute bottom-4 left-4 px-6 py-2 bg-white text-black rounded-full hover:scale-105 transition-transform"
         >
           Enable Vibration
         </button>
@@ -494,7 +494,7 @@ function OrangePhysics({
       const containerHeight = container?.clientHeight || window.innerHeight;
       const size = orangeSize; // consistently use orangeSize for boundaries
 
-      // Use sensor data if available; otherwise, default to an increased downward acceleration.
+      // Use sensor data if available; otherwise, use a default downward acceleration.
       const defaultAccel = { ax: 0, ay: 500 };
       const accel =
         (needsMotionPermission && !motionPermissionGranted) || !window.DeviceOrientationEvent
@@ -502,7 +502,7 @@ function OrangePhysics({
           : { ax: accelRef.current.ax * velocityBoost, ay: accelRef.current.ay * velocityBoost };
 
       setOranges((prevOranges) => {
-        // 1. Update positions.
+        // 1. Update positions with acceleration and boundary collisions.
         const newOranges = prevOranges.map((orange) => {
           let { x, y, vx, vy } = orange;
           vx += accel.ax * dt;
@@ -510,7 +510,6 @@ function OrangePhysics({
           x += vx * dt;
           y += vy * dt;
 
-          // Boundary collision check.
           if (x < 0) {
             x = 0;
             vx = -vx * 0.8;
@@ -530,19 +529,22 @@ function OrangePhysics({
           return { ...orange, x, y, vx, vy };
         });
 
+        // Define effective circle radius (less than half of the size for a tighter circle collision)
+        const effectiveRadius = size * 0.45; // using 45% of size as radius
+        const minDistance = effectiveRadius * 2; // sum of radii
+
         // 2. Orange-to-orange (circle) collision detection.
         for (let i = 0; i < newOranges.length; i++) {
           for (let j = i + 1; j < newOranges.length; j++) {
             const orangeA = newOranges[i];
             const orangeB = newOranges[j];
-            const ax = orangeA.x + size / 2;
-            const ay = orangeA.y + size / 2;
+            const ax = orangeA.x + size / 2; // center x of orangeA
+            const ay = orangeA.y + size / 2; // center y of orangeA
             const bx = orangeB.x + size / 2;
             const by = orangeB.y + size / 2;
             const dx = bx - ax;
             const dy = by - ay;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            const minDistance = size;
             if (distance < minDistance && distance > 0) {
               const overlap = (minDistance - distance) / 2;
               const nx = dx / distance;
@@ -575,13 +577,12 @@ function OrangePhysics({
             const orange = newOranges[i];
             const cx = orange.x + size / 2;
             const cy = orange.y + size / 2;
-            // Compute the closest point on the button rectangle.
             const nearestX = Math.max(buttonRect.left, Math.min(cx, buttonRect.right));
             const nearestY = Math.max(buttonRect.top, Math.min(cy, buttonRect.bottom));
             const distX = cx - nearestX;
             const distY = cy - nearestY;
             const dist = Math.sqrt(distX * distX + distY * distY);
-            if (dist < size / 2) {
+            if (dist < effectiveRadius) {
               let nx = distX;
               let ny = distY;
               if (dist === 0) {
@@ -594,7 +595,7 @@ function OrangePhysics({
               const dot = orange.vx * nx + orange.vy * ny;
               orange.vx = orange.vx - 2 * dot * nx;
               orange.vy = orange.vy - 2 * dot * ny;
-              const penetration = size / 2 - dist;
+              const penetration = effectiveRadius - dist;
               orange.x += nx * penetration;
               orange.y += ny * penetration;
             }
@@ -608,7 +609,6 @@ function OrangePhysics({
             el.style.transform = `translate(${orange.x}px, ${orange.y}px)`;
           }
         });
-
         return newOranges;
       });
       animationFrameId = requestAnimationFrame(update);
